@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <limits.h>
 #include <string.h>
 #include <time.h>
 
@@ -9,6 +8,7 @@ typedef struct {
     char pid[8];
     int  arrival;
     int  burst;
+    int  priority;
     int  remaining;
     int  completion;
     int  waiting;
@@ -30,11 +30,15 @@ Gantt gantt[5000];
 int   ganttCount = 0;
 int   cpuBusy    = 0;
 
-static int pick_shortest(int current_time) {
-    int idx = -1, min_rem = INT_MAX;
+static int pick_highest(int t) {
+    int idx = -1;
     for (int i = 0; i < n; i++) {
-        if (p[i].arrival <= current_time && p[i].remaining > 0)
-            if (p[i].remaining < min_rem) { min_rem = p[i].remaining; idx = i; }
+        if (p[i].arrival <= t && p[i].remaining > 0) {
+            if (idx == -1 ||
+                p[i].priority < p[idx].priority ||
+               (p[i].priority == p[idx].priority && p[i].arrival < p[idx].arrival))
+                idx = i;
+        }
     }
     return idx;
 }
@@ -58,15 +62,15 @@ void addGantt(char pid[], int start, int end) {
     ganttCount++;
 }
 
-void srfj() {
-    int start = INT_MAX;
-    for (int i = 0; i < n; i++) if (p[i].arrival < start) start = p[i].arrival;
+void priorityQueue() {
+    int start = 0;
+    for (int i = 0; i < n; i++) if (p[i].arrival < start || i == 0) start = p[i].arrival;
     int t = start;
 
     while (!all_done()) {
-        int idx = pick_shortest(t);
+        int idx = pick_highest(t);
         if (idx == -1) {
-            int next = INT_MAX;
+            int next = t + 1;
             for (int i = 0; i < n; i++)
                 if (p[i].remaining > 0 && p[i].arrival > t && p[i].arrival < next)
                     next = p[i].arrival;
@@ -80,9 +84,9 @@ void srfj() {
         cpuBusy++;
         t++;
         if (p[idx].remaining == 0) {
-            p[idx].completion  = t;
-            p[idx].turnaround  = t - p[idx].arrival;
-            p[idx].waiting     = p[idx].turnaround - p[idx].burst;
+            p[idx].completion = t;
+            p[idx].turnaround = t - p[idx].arrival;
+            p[idx].waiting    = p[idx].turnaround - p[idx].burst;
         }
     }
 }
@@ -103,7 +107,7 @@ void writeResults() {
 
     fprintf(fp, "{\n");
     fprintf(fp, "  \"timestamp\": %ld,\n", (long)time(NULL));
-    fprintf(fp, "  \"algorithm\": \"SRJF\",\n");
+    fprintf(fp, "  \"algorithm\": \"Priority (Preemptive)\",\n");
 
     fprintf(fp, "  \"ganttChart\": [\n");
     for (int i = 0; i < ganttCount; i++)
@@ -143,20 +147,22 @@ int main(void) {
         scanf("%d", &p[i].arrival);
         printf("  Burst time   : ");
         scanf("%d", &p[i].burst);
+        printf("  Priority     : ");
+        scanf("%d", &p[i].priority);
         p[i].remaining = p[i].burst;
         p[i].started   = 0;
     }
 
-    srfj();
+    priorityQueue();
 
     printf("\n=== Process Results ===\n");
-    printf("%-6s %-10s %-8s %-12s %-12s %-10s\n",
-           "PID", "Arrival", "Burst", "Completion", "Turnaround", "Waiting");
-    printf("------------------------------------------------------------\n");
+    printf("%-6s %-10s %-8s %-10s %-12s %-12s %-10s\n",
+           "PID", "Arrival", "Burst", "Priority", "Completion", "Turnaround", "Waiting");
+    printf("------------------------------------------------------------------------\n");
     float total_wt = 0, total_tat = 0;
     for (int i = 0; i < n; i++) {
-        printf("%-6s %-10d %-8d %-12d %-12d %-10d\n",
-               p[i].pid, p[i].arrival, p[i].burst,
+        printf("%-6s %-10d %-8d %-10d %-12d %-12d %-10d\n",
+               p[i].pid, p[i].arrival, p[i].burst, p[i].priority,
                p[i].completion, p[i].turnaround, p[i].waiting);
         total_wt  += p[i].waiting;
         total_tat += p[i].turnaround;

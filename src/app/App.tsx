@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 interface Process {
@@ -42,6 +42,59 @@ export default function App() {
     cpuUtilization: 0,
     throughput: 0
   });
+  const [pendingRun, setPendingRun] = useState(false);
+
+  useEffect(() => {
+    let lastInput = 0;
+    let lastResults = 0;
+
+    const interval = setInterval(async () => {
+      try {
+        // cli.js input — populates table and runs JS simulation
+        const r1 = await fetch(`/input.json?t=${Date.now()}`);
+        if (r1.ok) {
+          const d1 = await r1.json();
+          if (d1.timestamp !== lastInput) {
+            lastInput = d1.timestamp;
+            reset();
+            if (d1.processes) setProcesses(d1.processes);
+            if (d1.algorithm) setAlgorithm(d1.algorithm);
+            if (d1.timeQuantum) setTimeQuantum(d1.timeQuantum);
+            setPendingRun(true);
+          }
+        }
+      } catch { /* not present yet */ }
+
+      try {
+        // PriorityQueue.c output — directly sets results
+        const r2 = await fetch(`/results.json?t=${Date.now()}`);
+        if (r2.ok) {
+          const d2 = await r2.json();
+          if (d2.timestamp !== lastResults) {
+            lastResults = d2.timestamp;
+            const colors = ['#3B82F6','#60A5FA','#93C5FD','#2563EB','#1D4ED8','#1E40AF','#06B6D4','#0EA5E9','#0284C7','#0369A1'];
+            const pidIndex: Record<string, number> = {};
+            if (d2.ganttChart) {
+              d2.ganttChart.forEach((b: any) => { if (!(b.pid in pidIndex)) pidIndex[b.pid] = Object.keys(pidIndex).length; });
+              setGanttChart(d2.ganttChart.map((b: any) => ({ ...b, color: b.pid === 'IDLE' ? '#94A3B8' : colors[pidIndex[b.pid] % colors.length] })));
+            }
+            if (d2.stats) setStats(d2.stats);
+            if (d2.metrics) setMetrics(d2.metrics);
+            if (d2.algorithm) setAlgorithm(d2.algorithm);
+          }
+        }
+      } catch { /* not present yet */ }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (pendingRun && processes.length > 0) {
+      runSimulation();
+      setPendingRun(false);
+    }
+  }, [pendingRun, processes, algorithm, timeQuantum]);
 
   const addProcess = () => {
     const newProcess: Process = {
@@ -168,40 +221,46 @@ export default function App() {
       gantt = mergeAdjacentBlocks(gantt);
     } else if (algorithm === 'Round Robin') {
       let currentTime = 0;
-      let queue = [...sortedProcesses.map(p => ({ ...p, remaining: p.cpuBursts }))];
-      let firstResponse: Record<string, number> = {};
+      const procs = sortedProcesses.map((p, i) => ({ ...p, remaining: p.cpuBursts, colorIdx: i }));
+      const firstResponse: Record<string, number> = {};
+      const readyQueue: (typeof procs[0])[] = [];
+      let admitted = 0;
+      let completed = 0;
 
-      while (queue.some(p => p.remaining > 0)) {
-        for (let i = 0; i < queue.length; i++) {
-          const proc = queue[i];
-          if (proc.remaining > 0 && proc.arrivalTime <= currentTime) {
-            if (!(proc.pid in firstResponse)) {
-              firstResponse[proc.pid] = currentTime;
-            }
+      while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
+        readyQueue.push(procs[admitted++]);
 
-            const idx = sortedProcesses.findIndex(p => p.pid === proc.pid);
-            const executeTime = Math.min(timeQuantum, proc.remaining);
+      while (completed < procs.length) {
+        if (readyQueue.length === 0) {
+          currentTime = procs[admitted].arrivalTime;
+          while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
+            readyQueue.push(procs[admitted++]);
+          continue;
+        }
 
-            gantt.push({
-              pid: proc.pid,
-              start: currentTime,
-              end: currentTime + executeTime,
-              color: PROCESS_COLORS[idx % PROCESS_COLORS.length]
-            });
+        const proc = readyQueue.shift()!;
+        const executeTime = Math.min(timeQuantum, proc.remaining);
 
-            proc.remaining -= executeTime;
-            currentTime += executeTime;
+        if (!(proc.pid in firstResponse)) firstResponse[proc.pid] = currentTime;
 
-            if (proc.remaining === 0) {
-              const original = sortedProcesses.find(p => p.pid === proc.pid)!;
-              processStats.push({
-                pid: proc.pid,
-                turnaroundTime: currentTime - original.arrivalTime,
-                waitingTime: currentTime - original.arrivalTime - original.cpuBursts,
-                responseTime: firstResponse[proc.pid] - original.arrivalTime
-              });
-            }
-          }
+        gantt.push({ pid: proc.pid, start: currentTime, end: currentTime + executeTime, color: PROCESS_COLORS[proc.colorIdx % PROCESS_COLORS.length] });
+
+        proc.remaining -= executeTime;
+        currentTime += executeTime;
+
+        while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
+          readyQueue.push(procs[admitted++]);
+
+        if (proc.remaining === 0) {
+          completed++;
+          processStats.push({
+            pid: proc.pid,
+            turnaroundTime: currentTime - proc.arrivalTime,
+            waitingTime: currentTime - proc.arrivalTime - proc.cpuBursts,
+            responseTime: firstResponse[proc.pid] - proc.arrivalTime
+          });
+        } else {
+          readyQueue.push(proc);
         }
       }
     } else if (algorithm === 'Priority (Preemptive)') {
@@ -563,7 +622,7 @@ export default function App() {
 
               {ganttChart.length > 0 ? (
                 <div className="space-y-4">
-                  <div className={`relative h-20 rounded-lg border-2 overflow-x-auto ${
+                  <div className={`relative h-20 rounded-lg border-2 overflow-visible ${
                     darkMode
                       ? 'bg-black border-slate-700'
                       : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200'
@@ -572,27 +631,42 @@ export default function App() {
                       {ganttChart.map((block, idx) => (
                         <div
                           key={idx}
-                          className="relative flex items-center justify-center border-r-2 border-white shadow-sm"
-                          style={{
-                            width: `${((block.end - block.start) / maxTime) * 100}%`,
-                            backgroundColor: block.color
-                          }}
+                          className="group relative flex items-center justify-center border-r-2 border-white shadow-sm cursor-pointer"
+                          style={{ width: `${((block.end - block.start) / maxTime) * 100}%`, backgroundColor: block.color }}
                         >
-                          <span className="text-white font-medium drop-shadow">{block.pid}</span>
+                          <span className="text-white font-medium drop-shadow text-sm">{block.pid}</span>
+
+                          {/* Tooltip */}
+                          <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10
+                            opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-150
+                            text-xs rounded-lg shadow-lg px-3 py-2 whitespace-nowrap
+                            ${darkMode ? 'bg-slate-800 text-blue-100 border border-slate-600' : 'bg-white text-blue-900 border border-blue-200'}`}>
+                            <div className="font-semibold mb-1">{block.pid}</div>
+                            <div>Start : {block.start}</div>
+                            <div>End   : {block.end}</div>
+                            <div>Duration : {block.end - block.start}</div>
+                            {/* Arrow */}
+                            <div className={`absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent
+                              ${darkMode ? 'border-t-slate-800' : 'border-t-white'}`} />
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  <div className="relative h-6">
-                    <div className={`absolute inset-0 flex justify-between text-sm font-medium ${
+                  <div className="relative h-8">
+                    <div className={`absolute inset-0 flex text-xs font-medium ${
                       darkMode ? 'text-blue-200' : 'text-blue-700'
                     }`}>
                       {ganttChart.map((block, idx) => (
-                        <div key={idx} style={{ width: `${((block.end - block.start) / maxTime) * 100}%` }}>
-                          <div className="flex justify-between">
-                            {idx === 0 && <span>{block.start}</span>}
-                            <span className="ml-auto">{block.end}</span>
+                        <div key={idx} style={{ width: `${((block.end - block.start) / maxTime) * 100}%` }} className="relative">
+                          {idx === 0 && (
+                            <div className="absolute left-0">
+                              <span className="font-bold">{block.start}</span>
+                            </div>
+                          )}
+                          <div className="absolute right-0">
+                            <span className="font-bold">{block.end}</span>
                           </div>
                         </div>
                       ))}

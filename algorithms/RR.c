@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <limits.h>
 #include <string.h>
 #include <time.h>
 
@@ -30,19 +29,12 @@ Gantt gantt[5000];
 int   ganttCount = 0;
 int   cpuBusy    = 0;
 
-static int pick_shortest(int current_time) {
-    int idx = -1, min_rem = INT_MAX;
-    for (int i = 0; i < n; i++) {
-        if (p[i].arrival <= current_time && p[i].remaining > 0)
-            if (p[i].remaining < min_rem) { min_rem = p[i].remaining; idx = i; }
-    }
-    return idx;
-}
+int queue[5000];
+int qFront = 0, qRear = 0;
 
-static int all_done() {
-    for (int i = 0; i < n; i++) if (p[i].remaining > 0) return 0;
-    return 1;
-}
+void enqueue(int idx) { queue[qRear++] = idx; }
+int  dequeue()        { return queue[qFront++]; }
+int  qEmpty()         { return qFront == qRear; }
 
 void addGantt(char pid[], int start, int end) {
     if (start >= end) return;
@@ -58,31 +50,48 @@ void addGantt(char pid[], int start, int end) {
     ganttCount++;
 }
 
-void srfj() {
-    int start = INT_MAX;
-    for (int i = 0; i < n; i++) if (p[i].arrival < start) start = p[i].arrival;
-    int t = start;
+void roundRobin(int quantum) {
+    int completed = 0;
+    int inQueue[MAX] = {0};
+    int t = 0;
 
-    while (!all_done()) {
-        int idx = pick_shortest(t);
-        if (idx == -1) {
-            int next = INT_MAX;
+    for (int i = 0; i < n; i++)
+        if (p[i].arrival == 0) { enqueue(i); inQueue[i] = 1; }
+
+    while (completed < n) {
+        if (qEmpty()) {
+            int next = t + 1;
             for (int i = 0; i < n; i++)
                 if (p[i].remaining > 0 && p[i].arrival > t && p[i].arrival < next)
                     next = p[i].arrival;
             addGantt("IDLE", t, next);
             t = next;
+            for (int i = 0; i < n; i++)
+                if (!inQueue[i] && p[i].remaining > 0 && p[i].arrival <= t)
+                    { enqueue(i); inQueue[i] = 1; }
             continue;
         }
+
+        int idx   = dequeue();
+        int slice = p[idx].remaining < quantum ? p[idx].remaining : quantum;
+
         if (!p[idx].started) { p[idx].response = t - p[idx].arrival; p[idx].started = 1; }
-        addGantt(p[idx].pid, t, t + 1);
-        p[idx].remaining--;
-        cpuBusy++;
-        t++;
+        addGantt(p[idx].pid, t, t + slice);
+        p[idx].remaining -= slice;
+        cpuBusy          += slice;
+        t                += slice;
+
+        for (int i = 0; i < n; i++)
+            if (!inQueue[i] && p[i].remaining > 0 && p[i].arrival <= t)
+                { enqueue(i); inQueue[i] = 1; }
+
         if (p[idx].remaining == 0) {
-            p[idx].completion  = t;
-            p[idx].turnaround  = t - p[idx].arrival;
-            p[idx].waiting     = p[idx].turnaround - p[idx].burst;
+            p[idx].completion = t;
+            p[idx].turnaround = t - p[idx].arrival;
+            p[idx].waiting    = p[idx].turnaround - p[idx].burst;
+            completed++;
+        } else {
+            enqueue(idx);
         }
     }
 }
@@ -103,7 +112,7 @@ void writeResults() {
 
     fprintf(fp, "{\n");
     fprintf(fp, "  \"timestamp\": %ld,\n", (long)time(NULL));
-    fprintf(fp, "  \"algorithm\": \"SRJF\",\n");
+    fprintf(fp, "  \"algorithm\": \"Round Robin\",\n");
 
     fprintf(fp, "  \"ganttChart\": [\n");
     for (int i = 0; i < ganttCount; i++)
@@ -147,17 +156,21 @@ int main(void) {
         p[i].started   = 0;
     }
 
-    srfj();
+    int quantum;
+    printf("\nTime quantum : ");
+    scanf("%d", &quantum);
+
+    roundRobin(quantum);
 
     printf("\n=== Process Results ===\n");
-    printf("%-6s %-10s %-8s %-12s %-12s %-10s\n",
-           "PID", "Arrival", "Burst", "Completion", "Turnaround", "Waiting");
-    printf("------------------------------------------------------------\n");
+    printf("%-6s %-10s %-8s %-12s %-12s %-10s %-10s\n",
+           "PID", "Arrival", "Burst", "Completion", "Turnaround", "Waiting", "Response");
+    printf("------------------------------------------------------------------------\n");
     float total_wt = 0, total_tat = 0;
     for (int i = 0; i < n; i++) {
-        printf("%-6s %-10d %-8d %-12d %-12d %-10d\n",
+        printf("%-6s %-10d %-8d %-12d %-12d %-10d %-10d\n",
                p[i].pid, p[i].arrival, p[i].burst,
-               p[i].completion, p[i].turnaround, p[i].waiting);
+               p[i].completion, p[i].turnaround, p[i].waiting, p[i].response);
         total_wt  += p[i].waiting;
         total_tat += p[i].turnaround;
     }

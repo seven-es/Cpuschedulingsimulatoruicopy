@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <limits.h>
 #include <string.h>
 #include <time.h>
 
@@ -9,12 +8,10 @@ typedef struct {
     char pid[8];
     int  arrival;
     int  burst;
-    int  remaining;
     int  completion;
     int  waiting;
     int  turnaround;
     int  response;
-    int  started;
 } Process;
 
 typedef struct {
@@ -26,64 +23,27 @@ typedef struct {
 Process p[MAX];
 int     n;
 
-Gantt gantt[5000];
+Gantt gantt[MAX];
 int   ganttCount = 0;
 int   cpuBusy    = 0;
 
-static int pick_shortest(int current_time) {
-    int idx = -1, min_rem = INT_MAX;
+void fcfs() {
+    int t = 0;
+
     for (int i = 0; i < n; i++) {
-        if (p[i].arrival <= current_time && p[i].remaining > 0)
-            if (p[i].remaining < min_rem) { min_rem = p[i].remaining; idx = i; }
-    }
-    return idx;
-}
+        if (t < p[i].arrival) t = p[i].arrival;
 
-static int all_done() {
-    for (int i = 0; i < n; i++) if (p[i].remaining > 0) return 0;
-    return 1;
-}
+        strcpy(gantt[ganttCount].pid, p[i].pid);
+        gantt[ganttCount].start = t;
+        gantt[ganttCount].end   = t + p[i].burst;
+        ganttCount++;
 
-void addGantt(char pid[], int start, int end) {
-    if (start >= end) return;
-    if (ganttCount > 0 &&
-        strcmp(gantt[ganttCount - 1].pid, pid) == 0 &&
-        gantt[ganttCount - 1].end == start) {
-        gantt[ganttCount - 1].end = end;
-        return;
-    }
-    strcpy(gantt[ganttCount].pid, pid);
-    gantt[ganttCount].start = start;
-    gantt[ganttCount].end   = end;
-    ganttCount++;
-}
-
-void srfj() {
-    int start = INT_MAX;
-    for (int i = 0; i < n; i++) if (p[i].arrival < start) start = p[i].arrival;
-    int t = start;
-
-    while (!all_done()) {
-        int idx = pick_shortest(t);
-        if (idx == -1) {
-            int next = INT_MAX;
-            for (int i = 0; i < n; i++)
-                if (p[i].remaining > 0 && p[i].arrival > t && p[i].arrival < next)
-                    next = p[i].arrival;
-            addGantt("IDLE", t, next);
-            t = next;
-            continue;
-        }
-        if (!p[idx].started) { p[idx].response = t - p[idx].arrival; p[idx].started = 1; }
-        addGantt(p[idx].pid, t, t + 1);
-        p[idx].remaining--;
-        cpuBusy++;
-        t++;
-        if (p[idx].remaining == 0) {
-            p[idx].completion  = t;
-            p[idx].turnaround  = t - p[idx].arrival;
-            p[idx].waiting     = p[idx].turnaround - p[idx].burst;
-        }
+        p[i].response    = t - p[i].arrival;
+        cpuBusy         += p[i].burst;
+        t               += p[i].burst;
+        p[i].completion  = t;
+        p[i].turnaround  = t - p[i].arrival;
+        p[i].waiting     = p[i].turnaround - p[i].burst;
     }
 }
 
@@ -103,7 +63,7 @@ void writeResults() {
 
     fprintf(fp, "{\n");
     fprintf(fp, "  \"timestamp\": %ld,\n", (long)time(NULL));
-    fprintf(fp, "  \"algorithm\": \"SRJF\",\n");
+    fprintf(fp, "  \"algorithm\": \"FCFS\",\n");
 
     fprintf(fp, "  \"ganttChart\": [\n");
     for (int i = 0; i < ganttCount; i++)
@@ -143,11 +103,16 @@ int main(void) {
         scanf("%d", &p[i].arrival);
         printf("  Burst time   : ");
         scanf("%d", &p[i].burst);
-        p[i].remaining = p[i].burst;
-        p[i].started   = 0;
     }
 
-    srfj();
+    /* sort by arrival time */
+    for (int i = 0; i < n - 1; i++)
+        for (int j = i + 1; j < n; j++)
+            if (p[j].arrival < p[i].arrival) {
+                Process tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+            }
+
+    fcfs();
 
     printf("\n=== Process Results ===\n");
     printf("%-6s %-10s %-8s %-12s %-12s %-10s\n",

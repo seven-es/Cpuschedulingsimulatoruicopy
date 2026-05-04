@@ -1,0 +1,5 @@
+node_modules/
+dist/
+public/input.json
+public/results.json
+*.exe

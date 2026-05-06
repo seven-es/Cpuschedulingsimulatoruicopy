@@ -3,3 +3,5 @@ dist/
 public/input.json
 public/results.json
 *.exe
+algorithms/*.csv
+algorithms/*.xlsx

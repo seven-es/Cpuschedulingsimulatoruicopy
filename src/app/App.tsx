@@ -320,9 +320,8 @@ export default function App() {
               python run_all.py
             </code>
             <p className={`mt-3 text-xs ${sub}`}>
-              Compiles all 4 C algorithms, processes{' '}
-              <code className="font-mono">algorithms/workload.txt</code>,
-              and writes Excel + JSON files the UI reads.
+              Compiles all 4 C algorithms, processes each algorithm's
+              individual workload file, and writes Excel + JSON files the UI reads.
             </p>
           </div>
         )}

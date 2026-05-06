@@ -34,10 +34,16 @@ except ImportError:
     print("         Install with:  pip install openpyxl\n")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-SCRIPT_DIR    = Path(__file__).parent.resolve()
-ALGO_DIR      = SCRIPT_DIR / "algorithms"
-PUBLIC_DIR    = SCRIPT_DIR / "public"
-WORKLOAD_FILE = ALGO_DIR / "workload.txt"
+SCRIPT_DIR = Path(__file__).parent.resolve()
+ALGO_DIR   = SCRIPT_DIR / "algorithms"
+PUBLIC_DIR = SCRIPT_DIR / "public"
+
+WORKLOAD_FILES = [
+    ALGO_DIR / "FCFS_workload.txt",
+    ALGO_DIR / "RR_workload.txt",
+    ALGO_DIR / "SRFJ_workload.txt",
+    ALGO_DIR / "Priority_workload.txt",
+]
 
 IS_WIN = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if IS_WIN else ""
@@ -197,7 +203,7 @@ def build_ui_json(algo_name):
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 def run_all(compiled):
-    print(f"\n[{time.strftime('%H:%M:%S')}] Processing workload.txt ...")
+    print(f"\n[{time.strftime('%H:%M:%S')}] Processing workloads ...")
 
     all_data = {}
     for algo_name, exe_path in compiled.items():
@@ -233,7 +239,7 @@ def main():
     print("  CPU Scheduling Simulator — run_all.py")
     print("=" * 60)
     print(f"  Algorithms dir : {ALGO_DIR}")
-    print(f"  Workload file  : {WORKLOAD_FILE}")
+    print(f"  Workload files : FCFS / RR / SRFJ / Priority _workload.txt")
     print(f"  UI output dir  : {PUBLIC_DIR}")
     print()
 
@@ -241,17 +247,9 @@ def main():
         print(f"ERROR: algorithms/ directory not found at {ALGO_DIR}")
         sys.exit(1)
 
-    if not WORKLOAD_FILE.exists():
-        print("No workload.txt found — creating default one ...")
-        with open(WORKLOAD_FILE, "w") as f:
-            f.write("# CPU Scheduling Workload\n")
-            f.write("# Format: PID  Arrival  Burst  Priority\n")
-            f.write("# Lower priority number = higher urgency\n")
-            f.write("# quantum=2\n")
-            f.write("P1 0 8 2\n")
-            f.write("P2 1 4 1\n")
-            f.write("P3 2 9 3\n")
-            f.write("P4 3 5 2\n")
+    for wf in WORKLOAD_FILES:
+        if not wf.exists():
+            print(f"WARNING: {wf.name} not found — skipping.")
 
     print("Compiling algorithms ...")
     compiled = compile_all()
@@ -262,16 +260,19 @@ def main():
     # Run once immediately
     run_all(compiled)
 
-    # Watch for changes
-    print(f"\nWatching {WORKLOAD_FILE.name} for changes (Ctrl+C to stop) ...\n")
-    last_mtime = WORKLOAD_FILE.stat().st_mtime if WORKLOAD_FILE.exists() else 0
+    # Watch all individual workload files for changes
+    print(f"\nWatching workload files for changes (Ctrl+C to stop) ...\n")
+    def get_mtimes():
+        return {wf: wf.stat().st_mtime if wf.exists() else 0 for wf in WORKLOAD_FILES}
+
+    last_mtimes = get_mtimes()
 
     while True:
         try:
             time.sleep(1)
-            mtime = WORKLOAD_FILE.stat().st_mtime if WORKLOAD_FILE.exists() else 0
-            if mtime != last_mtime:
-                last_mtime = mtime
+            current_mtimes = get_mtimes()
+            if current_mtimes != last_mtimes:
+                last_mtimes = current_mtimes
                 run_all(compiled)
         except KeyboardInterrupt:
             print("\nStopped.")

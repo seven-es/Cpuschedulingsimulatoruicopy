@@ -1,850 +1,562 @@
 import { useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, PieChart, Pie, Cell,
+} from 'recharts';
 
-interface Process {
-  pid: string;
-  arrivalTime: number;
-  cpuBursts: number;
-  ioBursts: number;
-  priority: number;
-}
-
-interface GanttBlock {
+// ── Types matching public/all_results.json (written by run_all.py) ────────────
+interface GanttEntry {
   pid: string;
   start: number;
   end: number;
-  color: string;
 }
 
-interface ProcessStats {
+interface ProcessStat {
   pid: string;
+  arrival: number;
+  priority: number;
+  cpuBurst: number;
+  ioBurst: number;
   waitingTime: number;
   turnaroundTime: number;
   responseTime: number;
+  finish: number;
 }
 
+interface Summary {
+  [metric: string]: string;
+}
+
+interface AlgoResult {
+  algorithm: string;
+  label: string;
+  timestamp: number;
+  ganttChart: GanttEntry[];
+  processStats: ProcessStat[];
+  summary: Summary;
+}
+
+interface AllResults {
+  timestamp: number;
+  algorithms: Record<string, AlgoResult>;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const ALGO_KEYS = ['FCFS', 'RR', 'Priority', 'SRFJ'] as const;
+
+const ALGO_LABELS: Record<string, string> = {
+  FCFS:     'First Come First Serve',
+  RR:       'Round Robin',
+  Priority: 'Priority (Preemptive)',
+  SRFJ:     'Shortest Remaining First Job',
+};
+
+const ALGO_SHORT: Record<string, string> = {
+  FCFS: 'FCFS', RR: 'RR', Priority: 'Priority', SRFJ: 'SRFJ',
+};
+
+const ALGO_COLORS: Record<string, string> = {
+  FCFS: '#3B82F6', RR: '#F59E0B', Priority: '#8B5CF6', SRFJ: '#10B981',
+};
+
 const PROCESS_COLORS = [
-  '#3B82F6', '#60A5FA', '#93C5FD', '#2563EB', '#1D4ED8',
-  '#1E40AF', '#06B6D4', '#0EA5E9', '#0284C7', '#0369A1'
+  '#3B82F6', '#F59E0B', '#10B981', '#EF4444',
+  '#8B5CF6', '#06B6D4', '#EC4899', '#F97316',
+  '#84CC16', '#14B8A6',
 ];
 
-export default function App() {
-  const [processes, setProcesses] = useState<Process[]>([]);
-  const [algorithm, setAlgorithm] = useState<string>('FCFS');
-  const [timeQuantum, setTimeQuantum] = useState<number>(2);
-  const [ganttChart, setGanttChart] = useState<GanttBlock[]>([]);
-  const [stats, setStats] = useState<ProcessStats[]>([]);
-  const [darkMode, setDarkMode] = useState<boolean>(false);
-  const [metrics, setMetrics] = useState({
-    avgWaitingTime: 0,
-    avgTurnaroundTime: 0,
-    avgResponseTime: 0,
-    cpuUtilization: 0,
-    throughput: 0
-  });
-  const [pendingRun, setPendingRun] = useState(false);
+const SUMMARY_METRICS = [
+  { key: 'Average Waiting Time',    label: 'Avg Waiting',    color: 'from-blue-500 to-blue-600' },
+  { key: 'Average Turnaround Time', label: 'Avg Turnaround', color: 'from-cyan-500 to-cyan-600' },
+  { key: 'Average Response Time',   label: 'Avg Response',   color: 'from-sky-500 to-sky-600' },
+  { key: 'CPU Utilization',         label: 'CPU Util %',     color: 'from-blue-600 to-blue-700' },
+  { key: 'Throughput',              label: 'Throughput',     color: 'from-indigo-500 to-indigo-600' },
+  { key: 'Context Switches',        label: 'Context Sw.',    color: 'from-violet-500 to-violet-600' },
+];
 
-  useEffect(() => {
-    let lastInput = 0;
-    let lastResults = 0;
-
-    const interval = setInterval(async () => {
-      try {
-        // cli.js input — populates table and runs JS simulation
-        const r1 = await fetch(`/input.json?t=${Date.now()}`);
-        if (r1.ok) {
-          const d1 = await r1.json();
-          if (d1.timestamp !== lastInput) {
-            lastInput = d1.timestamp;
-            reset();
-            if (d1.processes) setProcesses(d1.processes);
-            if (d1.algorithm) setAlgorithm(d1.algorithm);
-            if (d1.timeQuantum) setTimeQuantum(d1.timeQuantum);
-            setPendingRun(true);
-          }
-        }
-      } catch { /* not present yet */ }
-
-      try {
-        // PriorityQueue.c output — directly sets results
-        const r2 = await fetch(`/results.json?t=${Date.now()}`);
-        if (r2.ok) {
-          const d2 = await r2.json();
-          if (d2.timestamp !== lastResults) {
-            lastResults = d2.timestamp;
-            const colors = ['#3B82F6','#60A5FA','#93C5FD','#2563EB','#1D4ED8','#1E40AF','#06B6D4','#0EA5E9','#0284C7','#0369A1'];
-            const pidIndex: Record<string, number> = {};
-            if (d2.ganttChart) {
-              d2.ganttChart.forEach((b: any) => { if (!(b.pid in pidIndex)) pidIndex[b.pid] = Object.keys(pidIndex).length; });
-              setGanttChart(d2.ganttChart.map((b: any) => ({ ...b, color: b.pid === 'IDLE' ? '#94A3B8' : colors[pidIndex[b.pid] % colors.length] })));
-            }
-            if (d2.stats) setStats(d2.stats);
-            if (d2.metrics) setMetrics(d2.metrics);
-            if (d2.algorithm) setAlgorithm(d2.algorithm);
-          }
-        }
-      } catch { /* not present yet */ }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    if (pendingRun && processes.length > 0) {
-      runSimulation();
-      setPendingRun(false);
-    }
-  }, [pendingRun, processes, algorithm, timeQuantum]);
-
-  const addProcess = () => {
-    const newProcess: Process = {
-      pid: `P${processes.length + 1}`,
-      arrivalTime: 0,
-      cpuBursts: 5,
-      ioBursts: 0,
-      priority: 1
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function colorizeGantt(gantt: GanttEntry[]) {
+  const pidIndex: Record<string, number> = {};
+  return gantt.map(b => {
+    if (!(b.pid in pidIndex)) pidIndex[b.pid] = Object.keys(pidIndex).length;
+    return {
+      ...b,
+      color: b.pid === 'IDLE' ? '#94A3B8'
+           : PROCESS_COLORS[pidIndex[b.pid] % PROCESS_COLORS.length],
     };
-    setProcesses([...processes, newProcess]);
-  };
+  });
+}
 
-  const loadSampleData = () => {
-    const sampleProcesses: Process[] = [
-      { pid: 'P1', arrivalTime: 0, cpuBursts: 8, ioBursts: 2, priority: 2 },
-      { pid: 'P2', arrivalTime: 1, cpuBursts: 4, ioBursts: 1, priority: 1 },
-      { pid: 'P3', arrivalTime: 2, cpuBursts: 9, ioBursts: 3, priority: 3 },
-      { pid: 'P4', arrivalTime: 3, cpuBursts: 5, ioBursts: 2, priority: 2 }
-    ];
-    setProcesses(sampleProcesses);
-  };
+// ── Sub-components ─────────────────────────────────────────────────────────────
+function GanttChart({ gantt, dm }: { gantt: GanttEntry[]; dm: boolean }) {
+  if (!gantt.length)
+    return <p className={`text-sm text-center py-4 ${dm ? 'text-slate-400' : 'text-blue-400'}`}>No Gantt data</p>;
 
-  const clearProcesses = () => {
-    setProcesses([]);
-    setGanttChart([]);
-    setStats([]);
-    setMetrics({
-      avgWaitingTime: 0,
-      avgTurnaroundTime: 0,
-      avgResponseTime: 0,
-      cpuUtilization: 0,
-      throughput: 0
-    });
-  };
-
-  const updateProcess = (index: number, field: keyof Process, value: string | number) => {
-    const updated = [...processes];
-    updated[index] = { ...updated[index], [field]: value };
-    setProcesses(updated);
-  };
-
-  const removeProcess = (index: number) => {
-    setProcesses(processes.filter((_, i) => i !== index));
-  };
-
-  const runSimulation = () => {
-    if (processes.length === 0) return;
-
-    let gantt: GanttBlock[] = [];
-    let processStats: ProcessStats[] = [];
-
-    const sortedProcesses = [...processes].sort((a, b) => a.arrivalTime - b.arrivalTime);
-
-    if (algorithm === 'FCFS') {
-      let currentTime = 0;
-      sortedProcesses.forEach((proc, idx) => {
-        const start = Math.max(currentTime, proc.arrivalTime);
-        const end = start + proc.cpuBursts;
-
-        gantt.push({
-          pid: proc.pid,
-          start,
-          end,
-          color: PROCESS_COLORS[idx % PROCESS_COLORS.length]
-        });
-
-        processStats.push({
-          pid: proc.pid,
-          waitingTime: start - proc.arrivalTime,
-          turnaroundTime: end - proc.arrivalTime,
-          responseTime: start - proc.arrivalTime
-        });
-
-        currentTime = end;
-      });
-    } else if (algorithm === 'SRJF') {
-      let currentTime = 0;
-      let remainingProcesses = sortedProcesses.map(p => ({ ...p, remaining: p.cpuBursts }));
-      let completed = 0;
-      let firstResponse: Record<string, number> = {};
-
-      while (completed < remainingProcesses.length) {
-        const available = remainingProcesses.filter(
-          p => p.arrivalTime <= currentTime && p.remaining > 0
-        );
-
-        if (available.length === 0) {
-          currentTime++;
-          continue;
-        }
-
-        const shortest = available.reduce((min, p) =>
-          p.remaining < min.remaining ? p : min
-        );
-
-        const idx = sortedProcesses.findIndex(p => p.pid === shortest.pid);
-
-        if (!(shortest.pid in firstResponse)) {
-          firstResponse[shortest.pid] = currentTime;
-        }
-
-        gantt.push({
-          pid: shortest.pid,
-          start: currentTime,
-          end: currentTime + 1,
-          color: PROCESS_COLORS[idx % PROCESS_COLORS.length]
-        });
-
-        shortest.remaining--;
-        currentTime++;
-
-        if (shortest.remaining === 0) {
-          completed++;
-          const original = sortedProcesses.find(p => p.pid === shortest.pid)!;
-          processStats.push({
-            pid: shortest.pid,
-            turnaroundTime: currentTime - original.arrivalTime,
-            waitingTime: currentTime - original.arrivalTime - original.cpuBursts,
-            responseTime: firstResponse[shortest.pid] - original.arrivalTime
-          });
-        }
-      }
-
-      gantt = mergeAdjacentBlocks(gantt);
-    } else if (algorithm === 'Round Robin') {
-      let currentTime = 0;
-      const procs = sortedProcesses.map((p, i) => ({ ...p, remaining: p.cpuBursts, colorIdx: i }));
-      const firstResponse: Record<string, number> = {};
-      const readyQueue: (typeof procs[0])[] = [];
-      let admitted = 0;
-      let completed = 0;
-
-      while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
-        readyQueue.push(procs[admitted++]);
-
-      while (completed < procs.length) {
-        if (readyQueue.length === 0) {
-          currentTime = procs[admitted].arrivalTime;
-          while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
-            readyQueue.push(procs[admitted++]);
-          continue;
-        }
-
-        const proc = readyQueue.shift()!;
-        const executeTime = Math.min(timeQuantum, proc.remaining);
-
-        if (!(proc.pid in firstResponse)) firstResponse[proc.pid] = currentTime;
-
-        gantt.push({ pid: proc.pid, start: currentTime, end: currentTime + executeTime, color: PROCESS_COLORS[proc.colorIdx % PROCESS_COLORS.length] });
-
-        proc.remaining -= executeTime;
-        currentTime += executeTime;
-
-        while (admitted < procs.length && procs[admitted].arrivalTime <= currentTime)
-          readyQueue.push(procs[admitted++]);
-
-        if (proc.remaining === 0) {
-          completed++;
-          processStats.push({
-            pid: proc.pid,
-            turnaroundTime: currentTime - proc.arrivalTime,
-            waitingTime: currentTime - proc.arrivalTime - proc.cpuBursts,
-            responseTime: firstResponse[proc.pid] - proc.arrivalTime
-          });
-        } else {
-          readyQueue.push(proc);
-        }
-      }
-    } else if (algorithm === 'Priority (Preemptive)') {
-      let currentTime = 0;
-      let remainingProcesses = sortedProcesses.map(p => ({ ...p, remaining: p.cpuBursts }));
-      let completed = 0;
-      let firstResponse: Record<string, number> = {};
-
-      while (completed < remainingProcesses.length) {
-        const available = remainingProcesses.filter(
-          p => p.arrivalTime <= currentTime && p.remaining > 0
-        );
-
-        if (available.length === 0) {
-          currentTime++;
-          continue;
-        }
-
-        const highestPriority = available.reduce((max, p) =>
-          p.priority > max.priority ? p : max
-        );
-
-        const idx = sortedProcesses.findIndex(p => p.pid === highestPriority.pid);
-
-        if (!(highestPriority.pid in firstResponse)) {
-          firstResponse[highestPriority.pid] = currentTime;
-        }
-
-        gantt.push({
-          pid: highestPriority.pid,
-          start: currentTime,
-          end: currentTime + 1,
-          color: PROCESS_COLORS[idx % PROCESS_COLORS.length]
-        });
-
-        highestPriority.remaining--;
-        currentTime++;
-
-        if (highestPriority.remaining === 0) {
-          completed++;
-          const original = sortedProcesses.find(p => p.pid === highestPriority.pid)!;
-          processStats.push({
-            pid: highestPriority.pid,
-            turnaroundTime: currentTime - original.arrivalTime,
-            waitingTime: currentTime - original.arrivalTime - original.cpuBursts,
-            responseTime: firstResponse[highestPriority.pid] - original.arrivalTime
-          });
-        }
-      }
-
-      gantt = mergeAdjacentBlocks(gantt);
-    }
-
-    const totalTime = gantt.length > 0 ? gantt[gantt.length - 1].end : 0;
-    const avgWT = processStats.reduce((sum, p) => sum + p.waitingTime, 0) / processStats.length;
-    const avgTAT = processStats.reduce((sum, p) => sum + p.turnaroundTime, 0) / processStats.length;
-    const avgRT = processStats.reduce((sum, p) => sum + p.responseTime, 0) / processStats.length;
-    const cpuTime = gantt.reduce((sum, b) => sum + (b.end - b.start), 0);
-
-    setGanttChart(gantt);
-    setStats(processStats.sort((a, b) => a.pid.localeCompare(b.pid)));
-    setMetrics({
-      avgWaitingTime: parseFloat(avgWT.toFixed(2)),
-      avgTurnaroundTime: parseFloat(avgTAT.toFixed(2)),
-      avgResponseTime: parseFloat(avgRT.toFixed(2)),
-      cpuUtilization: parseFloat(((cpuTime / totalTime) * 100).toFixed(2)),
-      throughput: parseFloat((processStats.length / totalTime).toFixed(2))
-    });
-  };
-
-  const mergeAdjacentBlocks = (blocks: GanttBlock[]): GanttBlock[] => {
-    if (blocks.length === 0) return [];
-
-    const merged: GanttBlock[] = [blocks[0]];
-
-    for (let i = 1; i < blocks.length; i++) {
-      const last = merged[merged.length - 1];
-      const current = blocks[i];
-
-      if (last.pid === current.pid && last.end === current.start) {
-        last.end = current.end;
-      } else {
-        merged.push(current);
-      }
-    }
-
-    return merged;
-  };
-
-  const reset = () => {
-    setGanttChart([]);
-    setStats([]);
-    setMetrics({
-      avgWaitingTime: 0,
-      avgTurnaroundTime: 0,
-      avgResponseTime: 0,
-      cpuUtilization: 0,
-      throughput: 0
-    });
-  };
-
-  const maxTime = ganttChart.length > 0 ? ganttChart[ganttChart.length - 1].end : 0;
-
-  const chartData = stats.map((stat) => ({
-    name: stat.pid,
-    'Waiting Time': stat.waitingTime,
-    'Turnaround Time': stat.turnaroundTime,
-    'Response Time': stat.responseTime
-  }));
-
-  const pieData = [
-    { name: 'CPU Time', value: metrics.cpuUtilization },
-    { name: 'Idle Time', value: 100 - metrics.cpuUtilization }
-  ];
-
-  const PIE_COLORS = darkMode ? ['#60A5FA', '#0F172A'] : ['#3B82F6', '#E0E7FF'];
-
-  const renderPieLabel = (props: any) => {
-    const { cx, cy, midAngle, innerRadius, outerRadius, percent, name } = props;
-    const RADIAN = Math.PI / 180;
-    const radius = outerRadius + 30;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-
-    return (
-      <text
-        x={x}
-        y={y}
-        fill={darkMode ? '#E0E7FF' : '#1E40AF'}
-        textAnchor={x > cx ? 'start' : 'end'}
-        dominantBaseline="central"
-        className="text-sm font-medium"
-      >
-        {`${name}: ${(percent * 100).toFixed(1)}%`}
-      </text>
-    );
-  };
+  const colored = colorizeGantt(gantt);
+  const maxTime = colored[colored.length - 1].end;
 
   return (
-    <div className={`min-h-screen p-6 transition-colors duration-300 ${
-      darkMode
-        ? 'bg-gradient-to-br from-black via-slate-950 to-black'
-        : 'bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50'
-    }`}>
-      <div className="max-w-[1600px] mx-auto">
-        <header className="mb-6 flex items-center justify-between">
+    <div className="space-y-1">
+      <div className={`relative h-14 rounded-lg overflow-hidden border ${dm ? 'bg-black border-slate-700' : 'bg-blue-50 border-blue-200'}`}>
+        <div className="absolute inset-0 flex">
+          {colored.map((b, i) => (
+            <div
+              key={i}
+              title={`${b.pid}: ${b.start}–${b.end} (${b.end - b.start} units)`}
+              className="relative flex items-center justify-center border-r border-white/20 group"
+              style={{ width: `${((b.end - b.start) / maxTime) * 100}%`, minWidth: 2, backgroundColor: b.color }}
+            >
+              {((b.end - b.start) / maxTime) > 0.04 && (
+                <span className="text-white text-xs font-semibold drop-shadow select-none">{b.pid}</span>
+              )}
+              <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-20
+                opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity
+                text-xs rounded px-2 py-1 whitespace-nowrap shadow-lg
+                ${dm ? 'bg-slate-800 text-blue-100 border border-slate-600'
+                     : 'bg-white text-blue-900 border border-blue-200'}`}>
+                {b.pid}: {b.start}→{b.end} ({b.end - b.start})
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className={`relative flex text-xs ${dm ? 'text-blue-300' : 'text-blue-600'}`} style={{ height: 16 }}>
+        {colored.map((b, i) => (
+          <div key={i} style={{ width: `${((b.end - b.start) / maxTime) * 100}%`, position: 'relative' }}>
+            {i === 0 && <span className="absolute left-0 font-bold">{b.start}</span>}
+            <span className="absolute right-0 font-bold">{b.end}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProcessTable({ stats, dm }: { stats: ProcessStat[]; dm: boolean }) {
+  if (!stats.length)
+    return <p className={`text-sm text-center py-4 ${dm ? 'text-slate-400' : 'text-blue-400'}`}>No data</p>;
+
+  const hasPriority = stats.some(s => s.priority !== 0);
+  const hasIO       = stats.some(s => s.ioBurst > 0);
+
+  type Col = { key: keyof ProcessStat | 'cpuBurst' | 'ioBurst'; label: string };
+  const cols: Col[] = [
+    { key: 'pid',           label: 'PID' },
+    { key: 'arrival',       label: 'Arrival' },
+    ...(hasPriority ? [{ key: 'priority' as const, label: 'Priority' }] : []),
+    { key: 'cpuBurst',      label: 'CPU Burst' },
+    ...(hasIO       ? [{ key: 'ioBurst'  as const, label: 'I/O Burst' }] : []),
+    { key: 'waitingTime',   label: 'Waiting' },
+    { key: 'turnaroundTime',label: 'Turnaround' },
+    { key: 'responseTime',  label: 'Response' },
+    { key: 'finish',        label: 'Finish' },
+  ];
+
+  const headerCls = dm ? 'bg-blue-900/40 text-blue-100' : 'bg-blue-600 text-white';
+  const rowEven   = dm ? 'bg-black text-blue-200'        : 'bg-blue-50 text-blue-700';
+  const rowOdd    = dm ? 'bg-slate-950 text-blue-200'    : 'bg-white text-blue-700';
+  const divLine   = dm ? 'border-slate-800'              : 'border-blue-100';
+
+  return (
+    <div className={`rounded-lg overflow-hidden border text-sm ${dm ? 'border-slate-700' : 'border-blue-200'}`}>
+      <div className={`grid ${headerCls}`}
+           style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0,1fr))` }}>
+        {cols.map(c => (
+          <div key={c.key} className="px-2 py-2 font-semibold text-center">{c.label}</div>
+        ))}
+      </div>
+      {stats.map((s, idx) => (
+        <div key={s.pid}
+             className={`grid border-t ${divLine} ${idx % 2 === 0 ? rowEven : rowOdd}`}
+             style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0,1fr))` }}>
+          <div className={`px-2 py-2 font-semibold text-center ${dm ? 'text-blue-100' : 'text-blue-900'}`}>{s.pid}</div>
+          <div className="px-2 py-2 text-center">{s.arrival}</div>
+          {hasPriority && <div className="px-2 py-2 text-center">{s.priority}</div>}
+          <div className="px-2 py-2 text-center">{s.cpuBurst}</div>
+          {hasIO       && <div className="px-2 py-2 text-center">{s.ioBurst || '—'}</div>}
+          <div className="px-2 py-2 text-center">{s.waitingTime}</div>
+          <div className="px-2 py-2 text-center">{s.turnaroundTime}</div>
+          <div className="px-2 py-2 text-center">{s.responseTime}</div>
+          <div className="px-2 py-2 text-center">{s.finish}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MetricCards({ summary, dm }: { summary: Summary; dm: boolean }) {
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {SUMMARY_METRICS.map(m => (
+        <div key={m.key} className={`bg-gradient-to-br ${m.color} rounded-xl p-4 text-white`}>
+          <div className="text-xs opacity-75 mb-1">{m.label}</div>
+          <div className="text-2xl font-semibold">
+            {summary[m.key] ?? '—'}
+            {m.key === 'CPU Utilization' && summary[m.key] ? '%' : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+export default function App() {
+  const [allResults, setAllResults] = useState<AllResults | null>(null);
+  const [activeTab, setActiveTab]   = useState<string>('overview');
+  const [darkMode, setDarkMode]     = useState(false);
+  const [lastUpdate, setLastUpdate] = useState('');
+  const [loading, setLoading]       = useState(true);
+
+  // Poll public/all_results.json — produced by run_all.py
+  useEffect(() => {
+    let lastTs = 0;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/all_results.json?t=${Date.now()}`);
+        if (!res.ok) return;
+        const data: AllResults = await res.json();
+        if (data.timestamp !== lastTs) {
+          lastTs = data.timestamp;
+          setAllResults(data);
+          setLastUpdate(new Date(data.timestamp * 1000).toLocaleTimeString());
+          setLoading(false);
+        }
+      } catch { /* file not ready yet */ }
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ── Theme helpers
+  const dm   = darkMode;
+  const bg   = dm ? 'bg-gradient-to-br from-black via-slate-950 to-black'
+                  : 'bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50';
+  const card = dm ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200';
+  const text = dm ? 'text-blue-50'  : 'text-blue-900';
+  const sub  = dm ? 'text-blue-300' : 'text-blue-600';
+  const ttStyle = {
+    backgroundColor: dm ? '#0F172A' : '#EFF6FF',
+    border: `1px solid ${dm ? '#1E293B' : '#BFDBFE'}`,
+    borderRadius: 8,
+    color: dm ? '#DBEAFE' : '#1E40AF',
+  };
+  const axisColor = dm ? '#60A5FA' : '#1E40AF';
+  const gridColor = dm ? '#1E293B' : '#BFDBFE';
+  const legendStyle = { color: dm ? '#DBEAFE' : '#1E40AF' };
+
+  // ── Overview data (all 5 key metrics compared across algorithms)
+  const metricComparison = SUMMARY_METRICS.slice(0, 5).map(m => {
+    const row: Record<string, string | number> = { metric: m.label };
+    ALGO_KEYS.forEach(a => {
+      const r = allResults?.algorithms[a];
+      row[a] = r ? parseFloat(r.summary[m.key] ?? '0') : 0;
+    });
+    return row;
+  });
+
+  // ── All unique PIDs (for cross-algorithm process comparison)
+  const allPids = Array.from(new Set(
+    ALGO_KEYS.flatMap(a => allResults?.algorithms[a]?.processStats.map(s => s.pid) ?? [])
+  )).sort();
+
+  const processWaitComparison = allPids.map(pid => {
+    const row: Record<string, string | number> = { pid };
+    ALGO_KEYS.forEach(a => {
+      const s = allResults?.algorithms[a]?.processStats.find(p => p.pid === pid);
+      row[`${a}_wait`] = s?.waitingTime ?? 0;
+    });
+    return row;
+  });
+
+  const processFullComparison = allPids.map(pid => {
+    const row: Record<string, string | number | null> = { pid };
+    ALGO_KEYS.forEach(a => {
+      const s = allResults?.algorithms[a]?.processStats.find(p => p.pid === pid);
+      row[`${a}_wait`] = s?.waitingTime   ?? null;
+      row[`${a}_turn`] = s?.turnaroundTime ?? null;
+      row[`${a}_resp`] = s?.responseTime  ?? null;
+    });
+    return row;
+  });
+
+  const tabs = [
+    { key: 'overview', label: 'Overview / Compare' },
+    ...ALGO_KEYS.map(k => ({ key: k, label: ALGO_SHORT[k] })),
+  ];
+
+  return (
+    <div className={`min-h-screen p-4 transition-colors duration-300 ${bg}`}>
+      <div className="max-w-[1600px] mx-auto space-y-4">
+
+        {/* Header */}
+        <header className="flex items-start justify-between">
           <div>
-            <h1 className={`text-3xl ${darkMode ? 'text-blue-50' : 'text-blue-900'}`}>
-              CPU Scheduling Simulator
-            </h1>
-            <p className={`mt-1 ${darkMode ? 'text-blue-200' : 'text-blue-700'}`}>
-              Educational tool for understanding CPU scheduling algorithms
+            <h1 className={`text-3xl font-bold ${text}`}>CPU Scheduling Simulator</h1>
+            <p className={`mt-1 text-sm ${sub}`}>
+              Results from <code className="font-mono">algorithms/*.xlsx</code> via{' '}
+              <code className="font-mono">python run_all.py</code>
+              {lastUpdate && <> · Updated <strong>{lastUpdate}</strong></>}
             </p>
           </div>
           <button
-            onClick={() => setDarkMode(!darkMode)}
-            className={`px-6 py-3 rounded-lg transition-all shadow-lg ${
-              darkMode
-                ? 'bg-slate-800 text-blue-100 hover:bg-slate-700 border border-blue-800'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
+            onClick={() => setDarkMode(!dm)}
+            className={`mt-1 px-4 py-2 rounded-lg text-sm shadow-md transition-colors ${
+              dm ? 'bg-slate-800 text-blue-100 border border-blue-800 hover:bg-slate-700'
+                 : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}
           >
-            {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+            {dm ? '☀ Light' : '🌙 Dark'}
           </button>
         </header>
 
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-4">
-            <div className={`rounded-xl shadow-lg p-6 border ${
-              darkMode
-                ? 'bg-slate-950 border-slate-800'
-                : 'bg-white border-blue-200'
-            }`}>
-              <h2 className={darkMode ? 'text-blue-50 mb-4' : 'text-blue-900 mb-4'}>Input Panel</h2>
-
-              <div className="space-y-4">
-                <div>
-                  <label className={`block mb-3 ${darkMode ? 'text-blue-100' : 'text-blue-800'}`}>
-                    Process Table
-                  </label>
-                  <div className={`border rounded-lg overflow-hidden ${
-                    darkMode ? 'border-slate-800' : 'border-blue-200'
-                  }`}>
-                    <div className={`p-3 ${darkMode ? 'bg-black' : 'bg-blue-50'}`}>
-                      <div className="grid grid-cols-6 gap-2 text-sm">
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>PID</div>
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>Arrival</div>
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>CPU</div>
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>I/O</div>
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>Priority</div>
-                        <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}></div>
-                      </div>
-                    </div>
-
-                    <div className="max-h-64 overflow-y-auto">
-                      {processes.map((proc, idx) => (
-                        <div key={idx} className={`grid grid-cols-6 gap-2 p-3 border-t items-center ${
-                          darkMode
-                            ? 'border-slate-900 hover:bg-slate-900'
-                            : 'border-blue-100 hover:bg-blue-50'
-                        }`}>
-                          <input
-                            type="text"
-                            value={proc.pid}
-                            onChange={(e) => updateProcess(idx, 'pid', e.target.value)}
-                            className={`w-full px-2 py-1.5 text-sm border rounded focus:outline-none ${
-                              darkMode
-                                ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                                : 'bg-white border-blue-200 focus:border-blue-400'
-                            }`}
-                          />
-                          <input
-                            type="number"
-                            value={proc.arrivalTime}
-                            onChange={(e) => updateProcess(idx, 'arrivalTime', parseInt(e.target.value) || 0)}
-                            className={`w-full px-2 py-1.5 text-sm border rounded focus:outline-none ${
-                              darkMode
-                                ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                                : 'bg-white border-blue-200 focus:border-blue-400'
-                            }`}
-                          />
-                          <input
-                            type="number"
-                            value={proc.cpuBursts}
-                            onChange={(e) => updateProcess(idx, 'cpuBursts', parseInt(e.target.value) || 0)}
-                            className={`w-full px-2 py-1.5 text-sm border rounded focus:outline-none ${
-                              darkMode
-                                ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                                : 'bg-white border-blue-200 focus:border-blue-400'
-                            }`}
-                          />
-                          <input
-                            type="number"
-                            value={proc.ioBursts}
-                            onChange={(e) => updateProcess(idx, 'ioBursts', parseInt(e.target.value) || 0)}
-                            className={`w-full px-2 py-1.5 text-sm border rounded focus:outline-none ${
-                              darkMode
-                                ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                                : 'bg-white border-blue-200 focus:border-blue-400'
-                            }`}
-                          />
-                          <input
-                            type="number"
-                            value={proc.priority}
-                            onChange={(e) => updateProcess(idx, 'priority', parseInt(e.target.value) || 0)}
-                            className={`w-full px-2 py-1.5 text-sm border rounded focus:outline-none ${
-                              darkMode
-                                ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                                : 'bg-white border-blue-200 focus:border-blue-400'
-                            }`}
-                          />
-                          <button
-                            onClick={() => removeProcess(idx)}
-                            className={`rounded px-2 py-1 text-lg ${
-                              darkMode
-                                ? 'text-red-400 hover:text-red-200 hover:bg-red-950'
-                                : 'text-red-500 hover:text-red-700 hover:bg-red-50'
-                            }`}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={addProcess}
-                    className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
-                  >
-                    Add Process
-                  </button>
-                  <button
-                    onClick={loadSampleData}
-                    className="flex-1 px-4 py-2.5 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 transition-colors shadow-sm"
-                  >
-                    Load Sample
-                  </button>
-                </div>
-
-                <button
-                  onClick={clearProcesses}
-                  className="w-full px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors"
-                >
-                  Clear All
-                </button>
-
-                <div className={`pt-4 border-t ${darkMode ? 'border-slate-900' : 'border-blue-200'}`}>
-                  <label className={`block mb-2 ${darkMode ? 'text-blue-100' : 'text-blue-800'}`}>
-                    Scheduling Algorithm
-                  </label>
-                  <select
-                    value={algorithm}
-                    onChange={(e) => setAlgorithm(e.target.value)}
-                    className={`w-full px-3 py-2.5 border-2 rounded-lg focus:outline-none ${
-                      darkMode
-                        ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                        : 'bg-white border-blue-300 focus:border-blue-500'
-                    }`}
-                  >
-                    <option value="FCFS">First Come First Serve</option>
-                    <option value="SRJF">Shortest Remaining Job First</option>
-                    <option value="Round Robin">Round Robin</option>
-                    <option value="Priority (Preemptive)">Priority (Preemptive)</option>
-                  </select>
-                </div>
-
-                {algorithm === 'Round Robin' && (
-                  <div>
-                    <label className={`block mb-2 ${darkMode ? 'text-blue-100' : 'text-blue-800'}`}>
-                      Time Quantum
-                    </label>
-                    <input
-                      type="number"
-                      value={timeQuantum}
-                      onChange={(e) => setTimeQuantum(parseInt(e.target.value) || 1)}
-                      className={`w-full px-3 py-2.5 border-2 rounded-lg focus:outline-none ${
-                        darkMode
-                          ? 'bg-black border-slate-700 text-blue-50 focus:border-blue-500'
-                          : 'bg-white border-blue-300 focus:border-blue-500'
-                      }`}
-                      min="1"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
+        {/* Loading */}
+        {loading && (
+          <div className={`rounded-xl p-10 text-center border ${card}`}>
+            <p className={`text-lg font-medium mb-2 ${text}`}>Waiting for algorithm results…</p>
+            <p className={`text-sm ${sub}`}>Open a terminal in the project root and run:</p>
+            <code className={`block mt-2 font-mono ${dm ? 'text-green-400' : 'text-green-700'}`}>
+              python run_all.py
+            </code>
+            <p className={`mt-3 text-xs ${sub}`}>
+              Compiles all 4 C algorithms, processes{' '}
+              <code className="font-mono">algorithms/workload.txt</code>,
+              and writes Excel + JSON files the UI reads.
+            </p>
           </div>
+        )}
 
-          <div className="col-span-8 space-y-6">
-            <div className={`rounded-xl shadow-lg p-5 border ${
-              darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200'
-            }`}>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className={darkMode ? 'text-blue-50' : 'text-blue-900'}>Simulation Controls</h2>
-                <div className="flex gap-3">
-                  <button
-                    onClick={runSimulation}
-                    className="px-8 py-2.5 bg-gradient-to-r from-blue-600 to-cyan-600 text-white rounded-lg hover:from-blue-700 hover:to-cyan-700 transition-all shadow-md"
-                  >
-                    Run
-                  </button>
-                  <button
-                    onClick={reset}
-                    className="px-8 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors shadow-md"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
+        {!loading && allResults && (
+          <>
+            {/* Tab bar */}
+            <div className={`flex gap-1 p-1 rounded-xl border ${card}`}>
+              {tabs.map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setActiveTab(t.key)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === t.key
+                      ? 'bg-blue-600 text-white shadow'
+                      : dm ? 'text-blue-300 hover:bg-slate-800' : 'text-blue-700 hover:bg-blue-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
 
-            <div className={`rounded-xl shadow-lg p-5 border ${
-              darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200'
-            }`}>
-              <h3 className={`mb-4 ${darkMode ? 'text-blue-50' : 'text-blue-900'}`}>Gantt Chart</h3>
+            {/* ── OVERVIEW ─────────────────────────────────────────────────── */}
+            {activeTab === 'overview' && (
+              <div className="space-y-6">
 
-              {ganttChart.length > 0 ? (
-                <div className="space-y-4">
-                  <div className={`relative h-20 rounded-lg border-2 overflow-visible ${
-                    darkMode
-                      ? 'bg-black border-slate-700'
-                      : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200'
-                  }`}>
-                    <div className="absolute inset-0 flex">
-                      {ganttChart.map((block, idx) => (
-                        <div
-                          key={idx}
-                          className="group relative flex items-center justify-center border-r-2 border-white shadow-sm cursor-pointer"
-                          style={{ width: `${((block.end - block.start) / maxTime) * 100}%`, backgroundColor: block.color }}
-                        >
-                          <span className="text-white font-medium drop-shadow text-sm">{block.pid}</span>
-
-                          {/* Tooltip */}
-                          <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10
-                            opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-150
-                            text-xs rounded-lg shadow-lg px-3 py-2 whitespace-nowrap
-                            ${darkMode ? 'bg-slate-800 text-blue-100 border border-slate-600' : 'bg-white text-blue-900 border border-blue-200'}`}>
-                            <div className="font-semibold mb-1">{block.pid}</div>
-                            <div>Start : {block.start}</div>
-                            <div>End   : {block.end}</div>
-                            <div>Duration : {block.end - block.start}</div>
-                            {/* Arrow */}
-                            <div className={`absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent
-                              ${darkMode ? 'border-t-slate-800' : 'border-t-white'}`} />
-                          </div>
+                {/* Algorithm summary cards */}
+                <div className="grid grid-cols-4 gap-4">
+                  {ALGO_KEYS.map(a => {
+                    const r = allResults.algorithms[a];
+                    return (
+                      <div key={a} className={`rounded-xl p-4 border ${card}`}>
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="w-3 h-3 rounded-full" style={{ backgroundColor: ALGO_COLORS[a] }} />
+                          <span className={`font-semibold text-sm ${text}`}>{ALGO_LABELS[a]}</span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="relative h-8">
-                    <div className={`absolute inset-0 flex text-xs font-medium ${
-                      darkMode ? 'text-blue-200' : 'text-blue-700'
-                    }`}>
-                      {ganttChart.map((block, idx) => (
-                        <div key={idx} style={{ width: `${((block.end - block.start) / maxTime) * 100}%` }} className="relative">
-                          {idx === 0 && (
-                            <div className="absolute left-0">
-                              <span className="font-bold">{block.start}</span>
-                            </div>
-                          )}
-                          <div className="absolute right-0">
-                            <span className="font-bold">{block.end}</span>
+                        {r ? (
+                          <div className="space-y-1.5 text-xs">
+                            {SUMMARY_METRICS.slice(0, 4).map(m => (
+                              <div key={m.key} className="flex justify-between">
+                                <span className={sub}>{m.label}</span>
+                                <span className={`font-medium ${text}`}>
+                                  {r.summary[m.key] ?? '—'}
+                                  {m.key === 'CPU Utilization' && r.summary[m.key] ? '%' : ''}
+                                </span>
+                              </div>
+                            ))}
                           </div>
-                        </div>
+                        ) : (
+                          <p className={`text-xs ${sub}`}>No data — run python run_all.py</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Metric comparison */}
+                <div className={`rounded-xl p-5 border ${card}`}>
+                  <h3 className={`font-semibold mb-4 ${text}`}>Algorithm Metric Comparison</h3>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={metricComparison}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                      <XAxis dataKey="metric" stroke={axisColor} tick={{ fontSize: 11 }} />
+                      <YAxis stroke={axisColor} tick={{ fontSize: 11 }} />
+                      <Tooltip contentStyle={ttStyle} />
+                      <Legend wrapperStyle={legendStyle} />
+                      {ALGO_KEYS.map(a => (
+                        <Bar key={a} dataKey={a} name={ALGO_SHORT[a]}
+                             fill={ALGO_COLORS[a]} radius={[4,4,0,0]} />
                       ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className={`h-24 rounded-lg border-2 flex items-center justify-center ${
-                  darkMode
-                    ? 'bg-black border-slate-700 text-blue-300'
-                    : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200 text-blue-400'
-                }`}>
-                  Run simulation to see Gantt chart
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-5 gap-4">
-              <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-5 text-white">
-                <div className="text-blue-100 text-xs mb-2">Avg Waiting Time</div>
-                <div className="text-3xl font-medium">{metrics.avgWaitingTime}</div>
-              </div>
-              <div className="bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-xl shadow-lg p-5 text-white">
-                <div className="text-cyan-100 text-xs mb-2">Avg Turnaround</div>
-                <div className="text-3xl font-medium">{metrics.avgTurnaroundTime}</div>
-              </div>
-              <div className="bg-gradient-to-br from-sky-500 to-sky-600 rounded-xl shadow-lg p-5 text-white">
-                <div className="text-sky-100 text-xs mb-2">Avg Response</div>
-                <div className="text-3xl font-medium">{metrics.avgResponseTime}</div>
-              </div>
-              <div className="bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl shadow-lg p-5 text-white">
-                <div className="text-blue-100 text-xs mb-2">CPU Utilization</div>
-                <div className="text-3xl font-medium">{metrics.cpuUtilization}%</div>
-              </div>
-              <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl shadow-lg p-5 text-white">
-                <div className="text-indigo-100 text-xs mb-2">Throughput</div>
-                <div className="text-3xl font-medium">{metrics.throughput}</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-6">
-              <div className={`rounded-xl shadow-lg p-5 border ${
-                darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200'
-              }`}>
-                <h3 className={`mb-4 ${darkMode ? 'text-blue-50' : 'text-blue-900'}`}>
-                  Process Time Comparison
-                </h3>
-                {stats.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#1E293B' : '#BFDBFE'} />
-                      <XAxis dataKey="name" stroke={darkMode ? '#60A5FA' : '#1E40AF'} />
-                      <YAxis stroke={darkMode ? '#60A5FA' : '#1E40AF'} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: darkMode ? '#0F172A' : '#EFF6FF',
-                          border: `1px solid ${darkMode ? '#1E293B' : '#BFDBFE'}`,
-                          borderRadius: '8px',
-                          color: darkMode ? '#DBEAFE' : '#1E40AF'
-                        }}
-                      />
-                      <Legend wrapperStyle={{ color: darkMode ? '#DBEAFE' : '#1E40AF' }} />
-                      <Bar dataKey="Waiting Time" fill="#3B82F6" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="Turnaround Time" fill="#06B6D4" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="Response Time" fill="#0EA5E9" radius={[8, 8, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
-                ) : (
-                  <div className={`h-64 rounded-lg border-2 flex items-center justify-center ${
-                    darkMode
-                      ? 'bg-black border-slate-700 text-blue-300'
-                      : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200 text-blue-400'
-                  }`}>
-                    Run simulation to see comparison chart
-                  </div>
-                )}
-              </div>
+                </div>
 
-              <div className={`rounded-xl shadow-lg p-5 border ${
-                darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200'
-              }`}>
-                <h3 className={`mb-4 ${darkMode ? 'text-blue-50' : 'text-blue-900'}`}>
-                  CPU Utilization
-                </h3>
-                {stats.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={true}
-                        label={renderPieLabel}
-                        outerRadius={70}
-                        fill="#8884d8"
-                        dataKey="value"
-                      >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: darkMode ? '#0F172A' : '#EFF6FF',
-                          border: `1px solid ${darkMode ? '#1E293B' : '#BFDBFE'}`,
-                          borderRadius: '8px',
-                          color: darkMode ? '#DBEAFE' : '#1E40AF'
-                        }}
-                      />
-                    </PieChart>
+                {/* Per-process waiting time */}
+                <div className={`rounded-xl p-5 border ${card}`}>
+                  <h3 className={`font-semibold mb-4 ${text}`}>Per-Process Waiting Time — All Algorithms</h3>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <BarChart data={processWaitComparison}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                      <XAxis dataKey="pid" stroke={axisColor} />
+                      <YAxis stroke={axisColor} tick={{ fontSize: 11 }} />
+                      <Tooltip contentStyle={ttStyle} />
+                      <Legend wrapperStyle={legendStyle} />
+                      {ALGO_KEYS.map(a => (
+                        <Bar key={a} dataKey={`${a}_wait`} name={`${ALGO_SHORT[a]} Wait`}
+                             fill={ALGO_COLORS[a]} radius={[4,4,0,0]} />
+                      ))}
+                    </BarChart>
                   </ResponsiveContainer>
-                ) : (
-                  <div className={`h-64 rounded-lg border-2 flex items-center justify-center ${
-                    darkMode
-                      ? 'bg-black border-slate-700 text-blue-300'
-                      : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200 text-blue-400'
-                  }`}>
-                    Run simulation to see utilization
+                </div>
+
+                {/* Full per-process comparison table */}
+                <div className={`rounded-xl p-5 border ${card}`}>
+                  <h3 className={`font-semibold mb-4 ${text}`}>Full Per-Process Statistics — All Algorithms</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr>
+                          <th className={`p-2 border text-left ${dm ? 'bg-slate-800 border-slate-700 text-blue-100' : 'bg-blue-600 border-blue-500 text-white'}`}>
+                            PID
+                          </th>
+                          {ALGO_KEYS.map(a => (
+                            <th key={a} colSpan={3}
+                                className={`p-2 border text-center ${dm ? 'bg-slate-800 border-slate-700 text-blue-100' : 'bg-blue-600 border-blue-500 text-white'}`}
+                                style={{ borderLeftColor: ALGO_COLORS[a], borderLeftWidth: 3 }}>
+                              {ALGO_SHORT[a]}
+                            </th>
+                          ))}
+                        </tr>
+                        <tr>
+                          <th className={`p-2 border ${dm ? 'bg-slate-900 border-slate-700 text-blue-200' : 'bg-blue-500 border-blue-400 text-white'}`} />
+                          {ALGO_KEYS.flatMap(a =>
+                            ['Wait', 'TAT', 'Resp'].map(h => (
+                              <th key={`${a}-${h}`}
+                                  className={`p-2 border text-center ${dm ? 'bg-slate-900 border-slate-700 text-blue-200' : 'bg-blue-500 border-blue-400 text-white'}`}>
+                                {h}
+                              </th>
+                            ))
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {processFullComparison.map((row, idx) => (
+                          <tr key={String(row.pid)}
+                              className={dm ? (idx%2===0?'bg-black':'bg-slate-950') : (idx%2===0?'bg-blue-50':'bg-white')}>
+                            <td className={`p-2 border font-semibold ${dm ? 'border-slate-800 text-blue-100' : 'border-blue-100 text-blue-900'}`}>
+                              {row.pid}
+                            </td>
+                            {ALGO_KEYS.flatMap(a =>
+                              (['_wait','_turn','_resp'] as const).map(s => (
+                                <td key={`${a}${s}`}
+                                    className={`p-2 border text-center ${dm ? 'border-slate-800 text-blue-300' : 'border-blue-100 text-blue-700'}`}>
+                                  {row[`${a}${s}`] ?? '—'}
+                                </td>
+                              ))
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                )}
+                </div>
+
               </div>
-            </div>
+            )}
 
-            <div className={`rounded-xl shadow-lg p-5 border ${
-              darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-blue-200'
-            }`}>
-              <h3 className={`mb-4 ${darkMode ? 'text-blue-50' : 'text-blue-900'}`}>
-                Process Statistics
-              </h3>
+            {/* ── INDIVIDUAL ALGORITHM TABS ─────────────────────────────────── */}
+            {ALGO_KEYS.map(algoKey => {
+              if (activeTab !== algoKey) return null;
+              const result = allResults.algorithms[algoKey];
 
-              {stats.length > 0 ? (
-                <div className={`border-2 rounded-lg overflow-hidden ${
-                  darkMode ? 'border-slate-800' : 'border-blue-200'
-                }`}>
-                  <div className={`grid grid-cols-4 gap-4 p-4 ${
-                    darkMode
-                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600'
-                      : 'bg-gradient-to-r from-blue-500 to-cyan-500'
-                  }`}>
-                    <div className="font-medium text-white">Process ID</div>
-                    <div className="font-medium text-white">Waiting Time</div>
-                    <div className="font-medium text-white">Turnaround Time</div>
-                    <div className="font-medium text-white">Response Time</div>
+              if (!result) return (
+                <div key={algoKey} className={`rounded-xl p-12 text-center border ${card}`}>
+                  <p className={sub}>
+                    No data for {algoKey}. Run <code className="font-mono">python run_all.py</code>.
+                  </p>
+                </div>
+              );
+
+              const chartData = result.processStats.map(s => ({
+                name:        s.pid,
+                Waiting:     s.waitingTime,
+                Turnaround:  s.turnaroundTime,
+                Response:    s.responseTime,
+              }));
+
+              const cpuUtil = parseFloat(result.summary['CPU Utilization'] ?? '0');
+              const pieData = [
+                { name: 'CPU Busy', value: cpuUtil },
+                { name: 'Idle',     value: Math.max(0, 100 - cpuUtil) },
+              ];
+              const PIE_COLORS = dm ? ['#60A5FA', '#1E293B'] : ['#3B82F6', '#DBEAFE'];
+
+              return (
+                <div key={algoKey} className="space-y-6">
+                  <div className="flex items-center gap-3">
+                    <span className="w-4 h-4 rounded-full" style={{ backgroundColor: ALGO_COLORS[algoKey] }} />
+                    <h2 className={`text-xl font-bold ${text}`}>{ALGO_LABELS[algoKey]}</h2>
                   </div>
 
-                  {stats.map((stat, idx) => (
-                    <div key={idx} className={`grid grid-cols-4 gap-4 p-4 border-t-2 ${
-                      darkMode
-                        ? `border-slate-900 ${idx % 2 === 0 ? 'bg-black' : 'bg-slate-950'}`
-                        : `border-blue-100 ${idx % 2 === 0 ? 'bg-blue-50' : 'bg-white'}`
-                    }`}>
-                      <div className={`font-medium ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>
-                        {stat.pid}
-                      </div>
-                      <div className={darkMode ? 'text-blue-200' : 'text-blue-700'}>
-                        {stat.waitingTime}
-                      </div>
-                      <div className={darkMode ? 'text-blue-200' : 'text-blue-700'}>
-                        {stat.turnaroundTime}
-                      </div>
-                      <div className={darkMode ? 'text-blue-200' : 'text-blue-700'}>
-                        {stat.responseTime}
-                      </div>
+                  {/* Gantt */}
+                  <div className={`rounded-xl p-5 border ${card}`}>
+                    <h3 className={`font-semibold mb-3 ${text}`}>Gantt Chart (CPU)</h3>
+                    <GanttChart gantt={result.ganttChart} dm={dm} />
+                  </div>
+
+                  {/* Metrics */}
+                  <MetricCards summary={result.summary} dm={dm} />
+
+                  {/* Charts */}
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className={`rounded-xl p-5 border ${card}`}>
+                      <h3 className={`font-semibold mb-4 ${text}`}>Process Time Comparison</h3>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <BarChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                          <XAxis dataKey="name" stroke={axisColor} />
+                          <YAxis stroke={axisColor} tick={{ fontSize: 11 }} />
+                          <Tooltip contentStyle={ttStyle} />
+                          <Legend wrapperStyle={legendStyle} />
+                          <Bar dataKey="Waiting"    fill="#3B82F6" radius={[4,4,0,0]} />
+                          <Bar dataKey="Turnaround" fill="#06B6D4" radius={[4,4,0,0]} />
+                          <Bar dataKey="Response"   fill="#0EA5E9" radius={[4,4,0,0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
                     </div>
-                  ))}
+
+                    <div className={`rounded-xl p-5 border ${card}`}>
+                      <h3 className={`font-semibold mb-4 ${text}`}>CPU Utilization</h3>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <PieChart>
+                          <Pie data={pieData} cx="50%" cy="50%" outerRadius={80}
+                               dataKey="value"
+                               label={({ name, percent }) => `${name}: ${(percent*100).toFixed(1)}%`}>
+                            {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i]} />)}
+                          </Pie>
+                          <Tooltip contentStyle={ttStyle} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Process stats table */}
+                  <div className={`rounded-xl p-5 border ${card}`}>
+                    <h3 className={`font-semibold mb-4 ${text}`}>Process Statistics</h3>
+                    <ProcessTable stats={result.processStats} dm={dm} />
+                  </div>
                 </div>
-              ) : (
-                <div className={`h-32 rounded-lg border-2 flex items-center justify-center ${
-                  darkMode
-                    ? 'bg-black border-slate-700 text-blue-300'
-                    : 'bg-gradient-to-r from-blue-50 to-cyan-50 border-blue-200 text-blue-400'
-                }`}>
-                  Run simulation to see process statistics
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+              );
+            })}
+          </>
+        )}
       </div>
     </div>
   );

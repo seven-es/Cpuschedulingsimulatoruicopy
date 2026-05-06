@@ -5,3 +5,5 @@ public/results.json
 *.exe
 algorithms/*.csv
 algorithms/*.xlsx
+public/all_results.json
+__pycache__/

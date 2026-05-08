@@ -38,12 +38,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 ALGO_DIR   = SCRIPT_DIR / "algorithms"
 PUBLIC_DIR = SCRIPT_DIR / "public"
 
-WORKLOAD_FILES = [
-    ALGO_DIR / "FCFS_workload.txt",
-    ALGO_DIR / "RR_workload.txt",
-    ALGO_DIR / "SRFJ_workload.txt",
-    ALGO_DIR / "Priority_workload.txt",
-]
+WORKLOAD_FILE = ALGO_DIR / "workload.txt"
 
 IS_WIN = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if IS_WIN else ""
@@ -93,7 +88,7 @@ def compile_all():
 # ── Running ───────────────────────────────────────────────────────────────────
 def run_algorithm(exe_path, algo_name):
     result = subprocess.run(
-        [str(exe_path)],
+        [str(exe_path), "workload.txt"],
         capture_output=True, text=True,
         cwd=str(ALGO_DIR)
     )
@@ -210,17 +205,17 @@ def run_all(compiled):
         if not run_algorithm(exe_path, algo_name):
             continue
 
-        # CSV → Excel
-        for suffix, title in [
-            ("gantt_chart",   "Gantt Chart"),
-            ("process_stats", "Process Stats"),
-            ("summary",       "Summary"),
-        ]:
-            csv_p  = ALGO_DIR / f"{algo_name}_{suffix}.csv"
-            xlsx_p = ALGO_DIR / f"{algo_name}_{suffix}.xlsx"
-            csv_to_excel(csv_p, xlsx_p, title)
-            if HAS_EXCEL and xlsx_p.exists():
-                print(f"  [XL]   {xlsx_p.name}")
+        # CSV → Excel (skipped for faster UI updates)
+        # for suffix, title in [
+        #     ("gantt_chart",   "Gantt Chart"),
+        #     ("process_stats", "Process Stats"),
+        #     ("summary",       "Summary"),
+        # ]:
+        #     csv_p  = ALGO_DIR / f"{algo_name}_{suffix}.csv"
+        #     xlsx_p = ALGO_DIR / f"{algo_name}_{suffix}.xlsx"
+        #     csv_to_excel(csv_p, xlsx_p, title)
+        #     if HAS_EXCEL and xlsx_p.exists():
+        #         print(f"  [XL]   {xlsx_p.name}")
 
         # Build UI JSON
         data = build_ui_json(algo_name)
@@ -239,7 +234,7 @@ def main():
     print("  CPU Scheduling Simulator — run_all.py")
     print("=" * 60)
     print(f"  Algorithms dir : {ALGO_DIR}")
-    print(f"  Workload files : FCFS / RR / SRFJ / Priority _workload.txt")
+    print(f"  Workload file  : {WORKLOAD_FILE}")
     print(f"  UI output dir  : {PUBLIC_DIR}")
     print()
 
@@ -247,9 +242,15 @@ def main():
         print(f"ERROR: algorithms/ directory not found at {ALGO_DIR}")
         sys.exit(1)
 
-    for wf in WORKLOAD_FILES:
-        if not wf.exists():
-            print(f"WARNING: {wf.name} not found — skipping.")
+    if not WORKLOAD_FILE.exists():
+        print("No workload.txt found — creating default one ...")
+        with open(WORKLOAD_FILE, "w") as f:
+            f.write("# CPU Scheduling Workload\n")
+            f.write("# Format: PID  Arrival  Priority  CPU_Bursts  IO_Bursts\n")
+            f.write("# quantum=2\n")
+            f.write("P1 0 2 (5,3) 4\n")
+            f.write("P2 1 1 4 -\n")
+            f.write("P3 2 3 6 -\n")
 
     print("Compiling algorithms ...")
     compiled = compile_all()
@@ -260,19 +261,15 @@ def main():
     # Run once immediately
     run_all(compiled)
 
-    # Watch all individual workload files for changes
-    print(f"\nWatching workload files for changes (Ctrl+C to stop) ...\n")
-    def get_mtimes():
-        return {wf: wf.stat().st_mtime if wf.exists() else 0 for wf in WORKLOAD_FILES}
-
-    last_mtimes = get_mtimes()
+    print(f"\nWatching {WORKLOAD_FILE.name} for changes (Ctrl+C to stop) ...\n")
+    last_mtime = WORKLOAD_FILE.stat().st_mtime if WORKLOAD_FILE.exists() else 0
 
     while True:
         try:
-            time.sleep(1)
-            current_mtimes = get_mtimes()
-            if current_mtimes != last_mtimes:
-                last_mtimes = current_mtimes
+            time.sleep(0.25)
+            mtime = WORKLOAD_FILE.stat().st_mtime if WORKLOAD_FILE.exists() else 0
+            if mtime != last_mtime:
+                last_mtime = mtime
                 run_all(compiled)
         except KeyboardInterrupt:
             print("\nStopped.")

@@ -225,7 +225,7 @@ export default function App() {
       } catch { /* file not ready yet */ }
     };
     poll();
-    const id = setInterval(poll, 2000);
+    const id = setInterval(poll, 500);
     return () => clearInterval(id);
   }, []);
 

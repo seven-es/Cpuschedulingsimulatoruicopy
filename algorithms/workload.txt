@@ -1,0 +1,10 @@
+# CPU Scheduling Workload
+# Format: PID  Arrival  Priority  CPU_Bursts  IO_Bursts
+# CPU_Bursts: single number or comma-separated list in parens e.g. (5,3)
+# IO_Bursts:  single number, list, or - for none
+# cpu_count must be exactly one more than io_count
+# quantum=3
+P1 0 2 (5,3) 4
+P2 1 1 4 -
+P3 2 3 (2,4,3) (3,2)
+P4 4 2 6 -

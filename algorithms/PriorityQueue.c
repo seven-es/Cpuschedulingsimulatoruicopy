@@ -81,14 +81,15 @@ static void simulate_priority(void) {
     }
 }
 
-int main(void) {
-    int loaded = load_workload_from(p, &n, "Priority_workload.txt");
+int main(int argc, char *argv[]) {
+    const char *workload = argc >= 2 ? argv[1] : "Priority_workload.txt";
+    int loaded = load_workload_from(p, &n, workload);
     if (loaded <= 0) {
         printf("No valid workload found.\n");
         return 1;
     }
 
-    printf("Loaded %d processes from Priority_workload.txt\n", n);
+    printf("Loaded %d processes from %s\n", n, workload);
     simulate_priority();
     write_result_files("Priority", p, n, gantt, gantt_count, cpu_busy);
     printf("CSV: Priority_gantt_chart.csv  Priority_process_stats.csv  Priority_summary.csv\n");

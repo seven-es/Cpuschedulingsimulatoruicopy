@@ -227,7 +227,7 @@ def run_all(compiled):
     out = PUBLIC_DIR / "all_results.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump(combined, f, indent=2)
-    print(f"  [UI]   Written → {out}")
+    print(f"  [UI]   Written -> {out}")
 
 def main():
     print("=" * 60)

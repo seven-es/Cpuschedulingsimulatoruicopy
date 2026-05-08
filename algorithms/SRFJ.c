@@ -83,14 +83,15 @@ static void simulate_srfj(void) {
     }
 }
 
-int main(void) {
-    int loaded = load_workload_from(p, &n, "SRFJ_workload.txt");
+int main(int argc, char *argv[]) {
+    const char *workload = argc >= 2 ? argv[1] : "SRFJ_workload.txt";
+    int loaded = load_workload_from(p, &n, workload);
     if (loaded <= 0) {
         printf("No valid workload found.\n");
         return 1;
     }
 
-    printf("Loaded %d processes from SRFJ_workload.txt\n", n);
+    printf("Loaded %d processes from %s\n", n, workload);
     simulate_srfj();
     write_result_files("SRFJ", p, n, gantt, gantt_count, cpu_busy);
     printf("CSV: SRFJ_gantt_chart.csv  SRFJ_process_stats.csv  SRFJ_summary.csv\n");

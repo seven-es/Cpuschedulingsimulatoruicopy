@@ -73,8 +73,9 @@ static void simulate_rr(int quantum) {
     }
 }
 
-int main(void) {
-    int loaded = load_workload_from(p, &n, "RR_workload.txt");
+int main(int argc, char *argv[]) {
+    const char *workload = argc >= 2 ? argv[1] : "RR_workload.txt";
+    int loaded = load_workload_from(p, &n, workload);
     if (loaded <= 0) {
         printf("No valid workload found.\n");
         return 1;
@@ -82,7 +83,7 @@ int main(void) {
 
     if (wl_quantum <= 0) wl_quantum = 2;
 
-    printf("Loaded %d processes from RR_workload.txt (quantum=%d)\n", n, wl_quantum);
+    printf("Loaded %d processes from %s (quantum=%d)\n", n, workload, wl_quantum);
     simulate_rr(wl_quantum);
     write_result_files("RR", p, n, gantt, gantt_count, cpu_busy);
     printf("CSV: RR_gantt_chart.csv  RR_process_stats.csv  RR_summary.csv\n");

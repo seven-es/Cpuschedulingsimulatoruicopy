@@ -333,7 +333,7 @@ export default function App() {
               {tabs.map(t => (
                 <button
                   key={t.key}
-                  onClick={() => setActiveTab(t.key)}
+                  onClick={() => { setActiveTab(t.key); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                   className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                     activeTab === t.key
                       ? 'bg-blue-600 text-white shadow'
